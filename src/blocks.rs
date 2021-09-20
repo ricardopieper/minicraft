@@ -1,3 +1,4 @@
+
 use cgmath::*;
 use vulkano as vk;
 
@@ -36,78 +37,92 @@ const CHUNK_MAXIDX_Y: usize = CHUNK_SIZE_Y - 1; //"layer"
 const CHUNK_MAXIDX_Z: usize = CHUNK_SIZE_Z - 1; //z-axis
 const CHUNK_MAXIDX_X: usize = CHUNK_SIZE_X - 1; //x-axis
 
+#[derive(Copy,Clone)]
 struct TextureQuad  {
     top_left: [f32; 2],
     top_right: [f32; 2],
     bottom_left: [f32; 2],
     bottom_right: [f32; 2],
 }
+
+impl TextureQuad {
+    const fn new(row: u32, col: u32) -> Self {
+        let row = row as f32;
+        let col = col as f32;
+        Self {
+            top_left: [QUADSIZE * col, QUADSIZE * row],
+            top_right: [QUADSIZE * (col + 1.0), QUADSIZE * row],
+            bottom_left: [QUADSIZE * col, QUADSIZE * (row + 1.0)],
+            bottom_right: [QUADSIZE * (col + 1.0), QUADSIZE * (row + 1.0)]
+        }
+    }
+
+    const fn rotate90(&self) -> Self {
+        Self {
+            top_left: self.bottom_left,
+            top_right: self.top_left,
+            bottom_right: self.top_right,
+            bottom_left: self.bottom_right,
+        }
+    }
+    const fn rotate180(&self) -> Self {
+        self.rotate90().rotate90()
+    }
+    const fn rotate270(&self) -> Self {
+        self.rotate90().rotate90().rotate90()
+    }
+    const fn all_rotations(&self) -> [TextureQuad; 4] {
+        [
+            *self,
+            self.rotate90(),
+            self.rotate180(),
+            self.rotate270()
+        ]
+    }
+}
+
 const QUADSIZE: f32 = 1.0 / 8.0;
-const GRASS: TextureQuad = TextureQuad { 
-    top_left: [0.0, 0.0],
-    top_right: [QUADSIZE, 0.0],
-    bottom_left: [0.0, QUADSIZE],
-    bottom_right: [QUADSIZE, QUADSIZE]
-};
-const GRASS2: TextureQuad = TextureQuad { 
-    top_left: [0.0, QUADSIZE],
-    top_right: [QUADSIZE, QUADSIZE],
-    bottom_left: [0.0, QUADSIZE * 2.0],
-    bottom_right: [QUADSIZE, QUADSIZE * 2.0]
-};
-const GRASS3: TextureQuad = TextureQuad { 
-    top_left: [0.0, QUADSIZE * 2.0],
-    top_right: [QUADSIZE, QUADSIZE * 2.0],
-    bottom_left: [0.0, QUADSIZE * 3.0],
-    bottom_right: [QUADSIZE, QUADSIZE * 3.0]
-};
-const GRASS4: TextureQuad = TextureQuad { 
-    top_left: [0.0, QUADSIZE * 3.0],
-    top_right: [QUADSIZE, QUADSIZE * 3.0],
-    bottom_left: [0.0, QUADSIZE * 4.0],
-    bottom_right: [QUADSIZE, QUADSIZE * 4.0]
-};
-const GRASS5: TextureQuad = TextureQuad { 
-    top_left: [0.0, QUADSIZE * 4.0],
-    top_right: [QUADSIZE, QUADSIZE * 4.0],
-    bottom_left: [0.0, QUADSIZE * 5.0],
-    bottom_right: [QUADSIZE, QUADSIZE * 5.0]
-};
-const GRASS6: TextureQuad = TextureQuad { 
-    top_left: [0.0, QUADSIZE * 5.0],
-    top_right: [QUADSIZE, QUADSIZE * 5.0],
-    bottom_left: [0.0, QUADSIZE * 6.0],
-    bottom_right: [QUADSIZE, QUADSIZE * 6.0]
-};
-const GRASS7: TextureQuad = TextureQuad { 
-    top_left: [0.0, QUADSIZE * 6.0],
-    top_right: [QUADSIZE, QUADSIZE * 6.0],
-    bottom_left: [0.0, QUADSIZE * 7.0],
-    bottom_right: [QUADSIZE, QUADSIZE * 7.0]
-};
-const GRASS8: TextureQuad = TextureQuad { 
-    top_left: [0.0, QUADSIZE * 7.0],
-    top_right: [QUADSIZE, QUADSIZE * 7.0],
-    bottom_left: [0.0, QUADSIZE * 8.0],
-    bottom_right: [QUADSIZE, QUADSIZE * 8.0]
-};
+const GRASS: TextureQuad = TextureQuad::new(0, 0);
+const GRASS_DIRT: TextureQuad = TextureQuad::new(0, 1);
+const DIRT: TextureQuad = TextureQuad::new(0, 2);
+const SAND: TextureQuad = TextureQuad::new(0, 3);
 
 
-const GRASSES: [TextureQuad; 8] = [GRASS, GRASS2, GRASS3, GRASS4, GRASS5, GRASS6, GRASS7, GRASS8];
+struct BlockTypeTexture {
+    top: [TextureQuad; 4],
+    bottom: [TextureQuad; 4],
+    left: [TextureQuad; 4],
+    right: [TextureQuad; 4],
+    front: [TextureQuad; 4],
+    back: [TextureQuad; 4]
+}
 
-const GRASS_DIRT: TextureQuad = TextureQuad { 
-    top_left: [QUADSIZE, 0.0],
-    top_right: [QUADSIZE * 2.0, 0.0],
-    bottom_left: [QUADSIZE, QUADSIZE],
-    bottom_right: [QUADSIZE * 2.0, QUADSIZE]
-};
-const DIRT: TextureQuad = TextureQuad { 
-    top_left: [QUADSIZE * 2.0, 0.0],
-    top_right: [QUADSIZE * 3.0, 0.0],
-    bottom_left: [QUADSIZE * 2.0, QUADSIZE],
-    bottom_right: [QUADSIZE * 3.0, QUADSIZE]
-};
+impl BlockTypeTexture {
+    const fn uniform_with_rotations(texquad: TextureQuad) -> Self {
+        Self {
+            top: texquad.all_rotations(),
+            bottom: texquad.all_rotations(),
+            left: texquad.all_rotations(),
+            right: texquad.all_rotations(),
+            front: texquad.all_rotations(),
+            back: texquad.all_rotations(),
+        }
+    }
 
+    const fn grassdirt_like(sides: TextureQuad, top: TextureQuad, bottom: TextureQuad) -> Self {
+        Self {
+            top: top.all_rotations(),
+            bottom: bottom.all_rotations(),
+            left: [sides, sides, sides, sides],
+            right: [sides, sides, sides, sides],
+            front: [sides, sides, sides, sides],
+            back: [sides, sides, sides, sides],
+        }
+    }
+}
+
+const BLOCK_TEXTURE_GRASS: BlockTypeTexture = BlockTypeTexture::grassdirt_like(GRASS_DIRT, GRASS, DIRT);
+const BLOCK_TEXTURE_SAND: BlockTypeTexture = BlockTypeTexture::uniform_with_rotations(SAND);
 
 pub struct Chunk {
     //these are the "world space" coordinates of the chunk, but they are not the coordinates of blocks.
@@ -138,7 +153,7 @@ impl World {
         return found
     }
 
-    fn generate_block(chunk_x: i32, chunk_z: i32, x: usize, y: usize, z: usize, last_index: u32, color: [f32; 3]) -> (Vec<Vertex>, Vec<u32>) {
+    fn generate_block(chunk_x: i32, chunk_z: i32, x: usize, y: usize, z: usize, last_index: u32, block_texture: BlockTypeTexture) -> (Vec<Vertex>, Vec<u32>) {
         use std::collections::hash_map::DefaultHasher;
         let mut s = DefaultHasher::new();
         use std::hash::*;
@@ -177,63 +192,75 @@ impl World {
             return vertices.len() as u32 - 1
         };
        
-        let modulus = hashval % GRASSES.len() as u64;
-        println!("Hash: {}, {}", hashval, modulus);        
-        let grass_texture = &GRASSES[modulus as usize];
-
+        let texture_variation = hashval % 4;
 
         //front face
         {
-            let a = v(front_top_left, green, GRASS_DIRT.top_left, 0.6);
-            let b = v(front_top_right, green, GRASS_DIRT.top_right, 0.6);
-            let c = v(front_bottom_right, green, GRASS_DIRT.bottom_right, 0.6);
-            let d = v(front_bottom_left, green, GRASS_DIRT.bottom_left, 0.6);
+            let tex = block_texture.front[texture_variation as usize];
+            let a = v(front_top_left, green, tex.top_left, 0.6);
+            let b = v(front_top_right, green, tex.top_right, 0.6);
+            let c = v(front_bottom_right, green, tex.bottom_right, 0.6);
+            let d = v(front_bottom_left, green, tex.bottom_left, 0.6);
             indices.extend(&[a, b, c, c, d, a]);
         }
         //right face
         {
-            let a = v(front_top_right, red, GRASS_DIRT.top_left, 0.6);
-            let b = v(back_top_right, red, GRASS_DIRT.top_right, 0.6);
-            let c = v(back_bottom_right, red, GRASS_DIRT.bottom_right, 0.6);
-            let d = v(front_bottom_right, red, GRASS_DIRT.bottom_left, 0.6);
+            let tex = block_texture.right[texture_variation as usize];
+            let a = v(front_top_right, red, tex.top_left, 0.6);
+            let b = v(back_top_right, red, tex.top_right, 0.6);
+            let c = v(back_bottom_right, red, tex.bottom_right, 0.6);
+            let d = v(front_bottom_right, red, tex.bottom_left, 0.6);
             indices.extend(&[a, b, c, c, d, a]);
         }
         //left face
         {
-            let a = v(back_top_left, red, GRASS_DIRT.top_left, 0.3);
-            let b = v(front_top_left, red, GRASS_DIRT.top_right, 0.3);
-            let c = v(front_bottom_left, red, GRASS_DIRT.bottom_right, 0.3);
-            let d = v(back_bottom_left, red, GRASS_DIRT.bottom_left, 0.3);
+            let tex = block_texture.left[texture_variation as usize];
+            let a = v(back_top_left, red, tex.top_left, 0.3);
+            let b = v(front_top_left, red, tex.top_right, 0.3);
+            let c = v(front_bottom_left, red, tex.bottom_right, 0.3);
+            let d = v(back_bottom_left, red, tex.bottom_left, 0.3);
             indices.extend(&[a, b, c, c, d, a]);
         }
         //back face
         {
-            let a = v(back_top_right, red, GRASS_DIRT.top_left, 0.3);
-            let b = v(back_top_left, red, GRASS_DIRT.top_right, 0.3);
-            let c = v(back_bottom_left, red, GRASS_DIRT.bottom_right, 0.3);
-            let d = v(back_bottom_right, red, GRASS_DIRT.bottom_left, 0.3);
+            let tex = block_texture.back[texture_variation as usize];
+            let a = v(back_top_right, red, tex.top_left, 0.3);
+            let b = v(back_top_left, red, tex.top_right, 0.3);
+            let c = v(back_bottom_left, red, tex.bottom_right, 0.3);
+            let d = v(back_bottom_right, red, tex.bottom_left, 0.3);
             indices.extend(&[a, b, c, c, d, a]);
         }
         //top face
         {
-            let a = v(back_top_left, red, grass_texture.top_left, 1.0);
-            let b = v(back_top_right, red, grass_texture.top_right, 1.0);
-            let c = v(front_top_right, red, grass_texture.bottom_right, 1.0);
-            let d = v(front_top_left, red, grass_texture.bottom_left, 1.0);
+            let tex = block_texture.top[texture_variation as usize];
+            let a = v(back_top_left, red, tex.top_left, 1.0);
+            let b = v(back_top_right, red, tex.top_right, 1.0);
+            let c = v(front_top_right, red, tex.bottom_right, 1.0);
+            let d = v(front_top_left, red, tex.bottom_left, 1.0);
             indices.extend(&[a, b, c, c, d, a]);
         }
         //bottom face
         {
-            let a = v(front_bottom_left, red, DIRT.top_left, 0.1);
-            let b = v(front_bottom_right, red, DIRT.top_right, 0.1);
-            let c = v(back_bottom_right, red, DIRT.bottom_right, 0.1);
-            let d = v(back_bottom_left, red, DIRT.bottom_left, 0.1);
+            let tex = block_texture.bottom[texture_variation as usize];
+            let a = v(front_bottom_left, red, tex.top_left, 0.1);
+            let b = v(front_bottom_right, red, tex.top_right, 0.1);
+            let c = v(back_bottom_right, red, tex.bottom_right, 0.1);
+            let d = v(back_bottom_left, red, tex.bottom_left, 0.1);
             indices.extend(&[a, b, c, c, d, a]);
         }
 
         let indices: Vec<u32> = indices.iter().map(|x| x + last_index).collect(); 
 
         return (vertices, indices);
+    }
+
+    fn get_block_texture(block_type: BlockType) -> BlockTypeTexture {
+        match block_type {
+            BlockType::Air => { panic!("Tried to get a texture for a block type AIR, which should never be rendered!"); },
+            BlockType::Grass => BLOCK_TEXTURE_GRASS,
+            BlockType::Sand => BLOCK_TEXTURE_SAND,
+            BlockType::Stone => { unimplemented!("Stone is not renderable yet, needs art") }
+        }
     }
 
     //x, y and z are relative to the chunk itself!
@@ -338,16 +365,11 @@ impl World {
                    
                         if !found_air { continue };
 
-                        let color = match item {
-                            BlockType::Sand => [0.5, 0.5, 0.0],
-                            BlockType::Grass => [0.0, 0.7, 0.0],
-                            BlockType::Stone => [0.3, 0.3, 0.3],
-                            _ => {[0.0, 0.0, 1.0]}
-                        };
+                        let block_texture = World::get_block_texture(*item);
 
                         let (generated_vertices, generated_indices) = World::generate_block(
                             chunk.x, chunk.z,
-                            x, y, z, vertices.len() as u32, color);
+                            x, y, z, vertices.len() as u32, block_texture);
                         vertices.extend(generated_vertices);
                         indices.extend(generated_indices);
                     }

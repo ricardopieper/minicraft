@@ -1,3 +1,4 @@
+#![feature(const_fn_floating_point_arithmetic)]
 mod camera;
 mod blocks;
 
@@ -81,10 +82,10 @@ fn create_vulkan_instance() -> Arc<vulkano::instance::Instance> {
     if ENABLE_VALIDATION_LAYERS && check_validation_layer_support() {
         println!("Creating debug instance");
         extensions.ext_debug_utils = true;
-        let instance = vulkano::instance::Instance::new(Some(&app_info), vk::Version::V1_1, &extensions, None);
+        let instance = vulkano::instance::Instance::new(Some(&app_info), vk::Version::V1_1, &extensions, VALIDATION_LAYERS.iter().cloned());
         return instance.expect("Failed to create Vulkan instance");
     } else {
-        let instance = vulkano::instance::Instance::new(Some(&app_info), vk::Version::V1_1, &extensions, VALIDATION_LAYERS.iter().cloned());
+        let instance = vulkano::instance::Instance::new(Some(&app_info), vk::Version::V1_0, &extensions, None);
         return instance.expect("Failed to create Vulkan instance");
     }
 }
@@ -924,7 +925,7 @@ fn main() {
             },
             winit::event::Event::NewEvents(_) => {},
             winit::event::Event::WindowEvent { event : winit::event::WindowEvent::CursorMoved{ position, ..}, .. } => {
-               // println!("Mouse moved: {:?}", position);
+                //println!("Mouse moved: {:?}", position);
                 let new_mouse_pos = vec2(position.x as f32, position.y as f32);
                 if allow_camera_movement {
                     game.camera.horizontal_angle += mouse_speed * delta.as_secs_f32() * (last_mouse_pos.x - new_mouse_pos.x);
@@ -932,6 +933,16 @@ fn main() {
                 }
                
                 last_mouse_pos = new_mouse_pos;
+            },
+            winit::event::Event::WindowEvent { event : winit::event::WindowEvent::MouseWheel { delta : winit::event::MouseScrollDelta::PixelDelta(
+                physical_position
+            ) , ..}, .. } => {
+                println!("Mouse moved: {:?}", physical_position);
+                let change_x = 0.1 * delta.as_secs_f32() * physical_position.x as f32;
+                let change_y = 0.1 * mouse_speed * delta.as_secs_f32() * physical_position.y as f32;
+                println!("Change in X, Y: {}, {}, delta secs: {}", change_x, change_y, delta.as_secs_f32());
+                game.camera.horizontal_angle += change_x;
+                game.camera.vertical_angle += change_y;
             },
             winit::event::Event::WindowEvent { event : winit::event::WindowEvent::MouseInput{ 
                 button: winit::event::MouseButton::Middle, state, ..}, .. } => {
@@ -945,6 +956,7 @@ fn main() {
                //  game.camera.vertical_angle += mouse_speed * delta.as_secs_f32() * (last_mouse_pos.y - new_mouse_pos.y);
                
              },
+            
             winit::event::Event::WindowEvent { event : winit::event::WindowEvent::AxisMotion{ ..}, .. } => { },
             winit::event::Event::WindowEvent { event : winit::event::WindowEvent::KeyboardInput {
                 input: winit::event::KeyboardInput { virtual_keycode: Some(key), state, .. }, .. }, ..} => {
