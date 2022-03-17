@@ -8,11 +8,13 @@ use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{WindowBuilder};
 use vulkano::instance::debug::{DebugCallback, MessageType};
 use std::sync::Arc;
+use std::thread;
 use vk::sync::GpuFuture;
 use cgmath::*;
 use camera::*;
 use blocks::*;
 use blocks::Vertex;
+use tracy_client;
 
 type WindowSurface = Arc<vk::swapchain::Surface<winit::window::Window>>; 
 type WindowSwapchain = Arc<vk::swapchain::Swapchain<winit::window::Window>>; 
@@ -365,7 +367,7 @@ fn create_render_pass(device: &Arc<vk::device::Device>, color_format: vk::format
                 depth: {
                     load: Clear,
                     store: DontCare,
-                    format: vk::format::Format::D16Unorm,
+                    format: vk::format::Format::D32Sfloat,
                     samples: 1,
                 }
             },
@@ -383,7 +385,7 @@ fn create_render_pass(device: &Arc<vk::device::Device>, color_format: vk::format
 fn create_framebuffers(device: &Arc<vk::device::Device>, render_pass: &Arc<vk::render_pass::RenderPass>, images: &[WindowSwapchainImage]) 
     -> Vec<Arc<Framebuffer>> {
     let depth_buffer = vk::image::view::ImageView::new(
-        vk::image::attachment::AttachmentImage::transient(device.clone(), images[0].dimensions(), vk::format::Format::D16Unorm).unwrap()
+        vk::image::attachment::AttachmentImage::transient(device.clone(), images[0].dimensions(), vk::format::Format::D32Sfloat).unwrap()
     ).unwrap();
 
     return images.iter()
@@ -524,13 +526,13 @@ impl MinicraftVulkanGraphics {
     
         let queue_family_indices = QueueFamilyIndices::find_queue_families(physical_device, &surface);
         let (logical_device, graphics_queue, present_queue) = create_logical_device(physical_device, queue_family_indices);
-
         let world = World::worldgen();
         let start = std::time::Instant::now();
         let (vertices, indices) = world.meshgen();
         let elapsed = start.elapsed();
         println!("Meshgen took {:?}", elapsed);
-       
+      
+
         /* let vertices = vec![
             Vertex::new([1.0, 1.0, 0.0], [0.0, 1.0, 0.0]),
             Vertex::new([2.0, 1.0, 0.0], [0.0, 1.0, 0.0]),
@@ -699,8 +701,6 @@ impl MinicraftVulkanGraphics {
 
 }
 
-
-
 fn main() {
     let mut game = Minicraft {
         camera: Camera {
@@ -769,6 +769,7 @@ fn main() {
 
         match event {
             winit::event::Event::WindowEvent  { event: winit::event::WindowEvent::CloseRequested, .. } => {
+                
                 println!("Closed requested!");
                 *control_flow  = ControlFlow::Exit;
             },
@@ -780,6 +781,7 @@ fn main() {
             },
             
             winit::event::Event::MainEventsCleared => {
+                tracy_client::start_noncontinuous_frame!("frame");
 
                 let movement = game.movement_speed * delta.as_secs_f32();
                 for key in keys_being_pressed.iter() {
@@ -808,11 +810,15 @@ fn main() {
 
               
                 let milis = delta.as_secs_f64() * 1000.0f64;
-                if frame % 1000 == 0 {
+                if frame % 100 == 0 {
                     if milis == 0.0 {
                         println!("fps: infinite, elapsed: {:?}", milis);
                     } else {
                         println!("fps: {:?}, elapsed: {:?}", 1000.0 / milis, milis);
+                        let pos = World::get_block_pos(game.camera.position);
+                        let chunk = Chunk::block_to_chunk_coords(pos);
+                        dbg!(game.camera.position, pos, chunk);
+                        
                     }
                 }
 
