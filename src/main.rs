@@ -256,7 +256,7 @@ impl Minicraft {
             primitive: wgpu::PrimitiveState {
                 topology: wgpu::PrimitiveTopology::TriangleList,
                 strip_index_format: None,
-                front_face: wgpu::FrontFace::Ccw,
+                front_face: wgpu::FrontFace::Cw,
                 cull_mode: Some(wgpu::Face::Back),
                 polygon_mode: wgpu::PolygonMode::Fill,
                 unclipped_depth: false,
@@ -390,7 +390,7 @@ pub async fn run() {
 
     event_loop.run(move |event, _, control_flow| {
         let current = std::time::SystemTime::now();
-        let delta = current.duration_since(prev).unwrap();
+        let delta = std::time::Duration::from_millis(2);
 
         match event {
             winit::event::Event::WindowEvent {
@@ -458,7 +458,7 @@ pub async fn run() {
                 event: winit::event::WindowEvent::CursorMoved { position, .. },
                 ..
             } => {
-                //println!("Mouse moved: {:?}", position);
+                println!("Mouse moved: {:?} {}", position, delta.as_secs_f32());
                 let new_mouse_pos = vec2(position.x as f32, position.y as f32);
                 if allow_camera_movement {
                     game.camera.horizontal_angle +=
@@ -504,9 +504,6 @@ pub async fn run() {
                     winit::event::ElementState::Pressed => true,
                     winit::event::ElementState::Released => false,
                 }
-
-                // game.camera.horizontal_angle += mouse_speed * delta.as_secs_f32() * (last_mouse_pos.x - new_mouse_pos.x);
-                //  game.camera.vertical_angle += mouse_speed * delta.as_secs_f32() * (last_mouse_pos.y - new_mouse_pos.y);
             }
 
             winit::event::Event::WindowEvent {
@@ -540,6 +537,7 @@ pub async fn run() {
         }
 
         prev = current;
+        //std::thread::sleep(std::time::Duration::from_millis(1));
     });
 }
 

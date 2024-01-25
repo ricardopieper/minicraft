@@ -270,9 +270,7 @@ impl World {
         block_texture: BlockTypeTexture,
         faces_to_render: Faces,
     ) -> (Vec<Vertex>, Vec<u32>) {
-        use std::collections::hash_map::DefaultHasher;
         let mut s = DefaultHasher::new();
-        use std::hash::Hash;
         use std::hash::*;
         #[derive(Hash)]
         struct HashedCoords {
@@ -323,7 +321,7 @@ impl World {
         };
 
         let texture_variation = hashval % 4;
-
+        //clockwise winding order
         //front face
         if faces_to_render.contains(Faces::Front) {
             let tex = block_texture.front[texture_variation as usize];
