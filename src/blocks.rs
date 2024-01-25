@@ -1,9 +1,9 @@
 use bitflags::bitflags;
 use cgmath::*;
 use noise::{NoiseFn, Perlin, Seedable};
-use vulkano as vk;
 
-#[derive(Copy, Clone, Default)]
+#[repr(C)]
+#[derive(Copy, Clone, Default, Debug, bytemuck::Pod, bytemuck::Zeroable)]
 pub struct Vertex {
     position: [f32; 3],
     color: [f32; 3],
@@ -12,17 +12,31 @@ pub struct Vertex {
 }
 
 impl Vertex {
+    const ATTRIBS: [wgpu::VertexAttribute; 4] = wgpu::vertex_attr_array![
+                0 => Float32x3,
+                1 => Float32x3,
+                2 => Float32x2,
+                3 => Float32];
+
     pub fn new(pos: [f32; 3], color: [f32; 3], tex: [f32; 2], light: f32) -> Self {
         Vertex {
             position: pos,
-            color: color,
+            color,
             tex_coords: tex,
             light_intensity: light,
         }
     }
+
+    pub fn desc() -> wgpu::VertexBufferLayout<'static> {
+        wgpu::VertexBufferLayout {
+            array_stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+            step_mode: wgpu::VertexStepMode::Vertex,
+            attributes: &Self::ATTRIBS,
+        }
+    }
 }
 
-vk::impl_vertex!(Vertex, position, color, tex_coords, light_intensity);
+//vk::impl_vertex!(Vertex, position, color, tex_coords, light_intensity);
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
 pub enum BlockType {
@@ -127,7 +141,8 @@ const BLOCK_TEXTURE_DIRT: BlockTypeTexture = BlockTypeTexture::uniform_with_rota
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct ChunkPosition {
-    x: i32, z: i32
+    x: i32,
+    z: i32,
 }
 pub fn chunkpos(x: i32, z: i32) -> ChunkPosition {
     ChunkPosition { x, z }
@@ -175,15 +190,15 @@ impl Chunk {
     //given x and z block coordinates in the world, returns the chunk coordinates
     pub fn block_to_chunk_coords(block: BlockPositionInWorld) -> ChunkPosition {
         ChunkPosition {
-                x:(block.pos.x as f32 / CHUNK_SIZE_X as f32) as i32,
-                z: (block.pos.z as f32 / CHUNK_SIZE_Z as f32) as i32,
+            x: (block.pos.x as f32 / CHUNK_SIZE_X as f32) as i32,
+            z: (block.pos.z as f32 / CHUNK_SIZE_Z as f32) as i32,
         }
     }
 
     pub fn get_chunk_coords(x: i32, z: i32) -> ChunkPosition {
         ChunkPosition {
-               x: (x as f32 / CHUNK_SIZE_X as f32) as i32,
-               z: (z as f32 / CHUNK_SIZE_Z as f32) as i32,
+            x: (x as f32 / CHUNK_SIZE_X as f32) as i32,
+            z: (z as f32 / CHUNK_SIZE_Z as f32) as i32,
         }
     }
 
@@ -226,12 +241,12 @@ bitflags! {
 }
 
 const OFFSETS_TO_CHECK: [(Faces, i32, i32, i32); 6] = [
-    (Faces::Front,  0,  0, -1),
-    (Faces::Right,  1,  0,  0),
-    (Faces::Left,  -1,  0,  0),
-    (Faces::Top,    0,  1,  0),
-    (Faces::Bottom, 0, -1,  0),
-    (Faces::Back,   0,  0,  1),
+    (Faces::Front, 0, 0, -1),
+    (Faces::Right, 1, 0, 0),
+    (Faces::Left, -1, 0, 0),
+    (Faces::Top, 0, 1, 0),
+    (Faces::Bottom, 0, -1, 0),
+    (Faces::Back, 0, 0, 1),
 ];
 
 impl World {
@@ -253,7 +268,7 @@ impl World {
         z: usize,
         last_index: u32,
         block_texture: BlockTypeTexture,
-        faces_to_render: Faces
+        faces_to_render: Faces,
     ) -> (Vec<Vertex>, Vec<u32>) {
         use std::collections::hash_map::DefaultHasher;
         let mut s = DefaultHasher::new();
@@ -267,21 +282,22 @@ impl World {
             y: usize,
             z: usize,
         }
-        let hashed = HashedCoords {
-            chunk_x,
-            chunk_z,
-            x,
-            y,
-            z,
-        };
+        let hashed =
+            HashedCoords {
+                chunk_x,
+                chunk_z,
+                x,
+                y,
+                z,
+            };
         hashed.hash(&mut s);
         let hashval = s.finish();
-        
+
         //position in "render space"
         let x = ((chunk_x as f32 * CHUNK_SIZE_X as f32) + x as f32) * BLOCKSIZE as f32;
         let y = y as f32 * BLOCKSIZE;
         let z = ((chunk_z as f32 * CHUNK_SIZE_Z as f32) + z as f32) * BLOCKSIZE as f32;
-       
+
         let blk_1x = 1.0 * BLOCKSIZE;
         let blk_2x = 2.0 * BLOCKSIZE;
         let back = -1.0 * BLOCKSIZE;
@@ -392,7 +408,6 @@ impl World {
     //negative numbers or even X Y Z > MAX, therefore we will check a neighboring chunk.
     //if chunk is unloaded, should return BlockType::Air
     pub fn blocktype(&self, chunk: &Chunk, x: i32, y: i32, z: i32) -> BlockType {
-
         //edge case: top-layer check: anything above CHUNK_SIZE_Y is air.
         if y > CHUNK_MAXIDX_Y as i32 {
             return BlockType::Air;
@@ -411,7 +426,8 @@ impl World {
         //Chunk edge detection
         //If X and Z are negative or above their limits, then must check neighboring chunk.
         //First detect for X:
-        if x < 0 { //x = -1, should be +15 on prev chunk
+        if x < 0 {
+            //x = -1, should be +15 on prev chunk
             actual_chunk_x -= 1; //[-1 0]
             actual_x = CHUNK_SIZE_X as i32 + x;
         } else if x > CHUNK_MAXIDX_X as i32 {
@@ -422,9 +438,10 @@ impl World {
         }
 
         //Detect for Z
-        if z < 0 { //z = -1, should be +15 on prev chunk
-            actual_chunk_z -= 1; 
-            actual_z =  CHUNK_SIZE_Z as i32 + z
+        if z < 0 {
+            //z = -1, should be +15 on prev chunk
+            actual_chunk_z -= 1;
+            actual_z = CHUNK_SIZE_Z as i32 + z
         } else if z > CHUNK_MAXIDX_Z as i32 {
             actual_chunk_z += 1;
             actual_z = z - CHUNK_SIZE_Z as i32;
@@ -432,8 +449,7 @@ impl World {
 
         //are we sill in the same chunk?
 
-        let same_chunk =
-            actual_chunk_x == chunk.chunk_pos.x && actual_chunk_z == chunk.chunk_pos.z;
+        let same_chunk = actual_chunk_x == chunk.chunk_pos.x && actual_chunk_z == chunk.chunk_pos.z;
         if same_chunk {
             //y z x
             chunk.blocks[y as usize][actual_z as usize][actual_x as usize]
@@ -456,7 +472,9 @@ impl World {
             for (y, layer) in chunk.blocks.iter().enumerate() {
                 for (z, row) in layer.iter().enumerate() {
                     for (x, item) in row.iter().enumerate() {
-                        if let BlockType::Air = item { continue; }
+                        if let BlockType::Air = item {
+                            continue;
+                        }
                         let mut faces_to_render = Faces::None;
                         for (face, offx, offy, offz) in OFFSETS_TO_CHECK {
                             let blocktype = self.blocktype(
@@ -470,7 +488,7 @@ impl World {
                                 faces_to_render |= face;
                             }
                         }
-                       
+
                         if faces_to_render == Faces::None {
                             continue;
                         }
@@ -483,7 +501,7 @@ impl World {
                             z,
                             vertices.len() as u32,
                             block_texture,
-                            faces_to_render
+                            faces_to_render,
                         );
                         vertices.extend(generated_vertices);
                         indices.extend(generated_indices);
@@ -502,15 +520,17 @@ impl World {
         );
     }
 
-    
-
     /*
     block_pos is the position in worldspace, regardless of chunk!
     Should not to be used during world gen
     */
-    pub fn set_block(&mut self, block_pos: BlockPositionInWorld, block_type: BlockType) -> ChunkPosition {
+    pub fn set_block(
+        &mut self,
+        block_pos: BlockPositionInWorld,
+        block_type: BlockType,
+    ) -> ChunkPosition {
         let chunk_pos = Chunk::block_to_chunk_coords(block_pos);
-        let chunk =  self.chunks.get_mut(&chunk_pos);
+        let chunk = self.chunks.get_mut(&chunk_pos);
         let chunk_coords =
             Chunk::get_chunkspace_coords_from_worldspace_coords(chunk_pos, block_pos);
         match chunk {
@@ -526,9 +546,15 @@ impl World {
         return chunk_pos;
     }
 
-    pub fn set_block_known_chunk(&mut self, block_pos: BlockPositionInWorld, block_type: BlockType, chunk: &mut Chunk) {
+    pub fn set_block_known_chunk(
+        &mut self,
+        block_pos: BlockPositionInWorld,
+        block_type: BlockType,
+        chunk: &mut Chunk,
+    ) {
         let chunk_pos = Chunk::block_to_chunk_coords(block_pos);
-        let chunk_coords = Chunk::get_chunkspace_coords_from_worldspace_coords(chunk_pos, block_pos);
+        let chunk_coords =
+            Chunk::get_chunkspace_coords_from_worldspace_coords(chunk_pos, block_pos);
         chunk.set_block(chunk_coords, block_type);
     }
 
@@ -567,7 +593,7 @@ impl World {
 
                 if height < min { min = height };
                 if height > max { max = height };
-                
+
                 let chunk_coords = Chunk::get_chunkspace_coords_from_worldspace_coords(chunk_pos, blockpos_world(x, height, z));
                 chunk.set_block(chunk_coords, BlockType::Grass);
                 for y in 0 .. height {
@@ -575,29 +601,27 @@ impl World {
                     chunk.set_block(chunk_coords, BlockType::Dirt);
                     blocks += 1;
                 }
-              
+
                 perlin_point[0] += 0.015;
-                
+
             }
             perlin_point[1] += 0.015;
             perlin_point[0] = 0.0;
             max_height_perlin += 0.001;
         }
-    
+
         println!("Generated world, chunks: {:?}, blocks: {}", world.chunks.len(), blocks);
-    
+
         return world;
     }
     */
 
-
-  
-
     pub fn worldgen() -> World {
-       
         let world_perlin = PerlinNoiseGen::new(&TERRAIN);
-        
-        let mut world = World { chunks: std::collections::HashMap::new() };
+
+        let mut world = World {
+            chunks: std::collections::HashMap::new(),
+        };
         let mut perlin_point = [0.0, 0.0];
         let mut blocks = 0;
 
@@ -613,25 +637,38 @@ impl World {
                 let perlin = world_perlin.sample([x, z]) * (CHUNK_SIZE_Y as f64 / 3.0);
                 let height = perlin as i32;
 
-                if height < min { min = height };
-                if height > max { max = height };
-                
-                let chunk_coords = Chunk::get_chunkspace_coords_from_worldspace_coords(chunk_pos, blockpos_world(x, height, z));
+                if height < min {
+                    min = height
+                };
+                if height > max {
+                    max = height
+                };
+
+                let chunk_coords = Chunk::get_chunkspace_coords_from_worldspace_coords(
+                    chunk_pos,
+                    blockpos_world(x, height, z),
+                );
                 chunk.set_block(chunk_coords, BlockType::Grass);
-                for y in 0 .. height {
-                    let chunk_coords = Chunk::get_chunkspace_coords_from_worldspace_coords(chunk_pos, blockpos_world(x, y, z));
+                for y in 0..height {
+                    let chunk_coords = Chunk::get_chunkspace_coords_from_worldspace_coords(
+                        chunk_pos,
+                        blockpos_world(x, y, z),
+                    );
                     chunk.set_block(chunk_coords, BlockType::Dirt);
                     blocks += 1;
                 }
             }
         }
-    
-        println!("Generated world, chunks: {:?}, blocks: {}", world.chunks.len(), blocks);
-    
+
+        println!(
+            "Generated world, chunks: {:?}, blocks: {}",
+            world.chunks.len(),
+            blocks
+        );
+
         return world;
     }
 }
-
 
 //const SAMPLING_RATES: &'static [f64] = &[
 //    0.003, 0.01, 0.05
@@ -644,7 +681,7 @@ const INTERESTING_MOUNTAINS: &'static [f64] = &[0.01, 0.04];
 const RUGGED_MOUNTAINS: &'static [f64] = &[0.01, 0.04, 0.08];
 const NICE_PLAINS: &'static [f64] = &[0.0005];
 const MAYBE_NICER_PLAINS: &'static [f64] = &[0.00005, 0.0005, 0.005];
-const NICE_PLAINS_2: &'static [f64] =  &[0.0005, 0.002];
+const NICE_PLAINS_2: &'static [f64] = &[0.0005, 0.002];
 const LOW_HILLS: &'static [f64] = &[0.0005, 0.01];
 const LOW_HILLS_2: &'static [f64] = &[0.0005, 0.02, 0.001];
 const HIGH_SPIKES: &'static [f64] = &[0.05, 0.003];
@@ -655,7 +692,7 @@ const DIVISOR: f64 = 3.0;
 
 struct PerlinNoiseGen {
     sampling_rates: &'static [f64],
-    noise_gens: Vec<noise::Perlin>
+    noise_gens: Vec<noise::Perlin>,
 }
 
 impl PerlinNoiseGen {
@@ -666,7 +703,8 @@ impl PerlinNoiseGen {
         }
 
         PerlinNoiseGen {
-            noise_gens, sampling_rates
+            noise_gens,
+            sampling_rates,
         }
     }
 
@@ -674,12 +712,14 @@ impl PerlinNoiseGen {
         let mut rate = STARTING_RATE;
         let mut sampled = 0.0;
         for (gen, sampling_rate) in self.noise_gens.iter().zip(self.sampling_rates) {
-            let perlin_coord = [block_pos[0] as f64 * sampling_rate, block_pos[1] as f64 * sampling_rate];
+            let perlin_coord = [
+                block_pos[0] as f64 * sampling_rate,
+                block_pos[1] as f64 * sampling_rate,
+            ];
             let generated = gen.get(perlin_coord).abs() * rate;
             sampled += generated;
             rate /= DIVISOR;
         }
         return sampled;
     }
-
 }
