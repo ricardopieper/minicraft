@@ -6,6 +6,9 @@ use blocks::Vertex;
 use blocks::*;
 use camera::*;
 use cgmath::*;
+use winit::event::{
+    DeviceEvent, ElementState, KeyboardInput, MouseButton, VirtualKeyCode, WindowEvent,
+};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::WindowBuilder;
 
@@ -31,13 +34,63 @@ struct Minicraft {
 
     atlas_bind_group: wgpu::BindGroup,
     movement_speed: f32,
+
     camera: Camera,
     camera_uniform: CameraUniform,
+    camera_controller: CameraController,
+    camera_projection: Projection,
+
     camera_buffer: wgpu::Buffer,
     camera_bind_group: wgpu::BindGroup,
+
+    depth_texture: (wgpu::Texture, wgpu::TextureView, wgpu::Sampler),
+    mouse_pressed: bool,
+    allow_cam_rotation: bool,
 }
 
 impl Minicraft {
+    pub const DEPTH_FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
+
+    //z-buffer
+    pub fn create_depth_texture(
+        device: &wgpu::Device,
+        config: &wgpu::SurfaceConfiguration,
+    ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Sampler) {
+        let size = wgpu::Extent3d {
+            width: config.width,
+            height: config.height,
+            depth_or_array_layers: 1,
+        };
+
+        let desc = wgpu::TextureDescriptor {
+            label: Some("Depth Texture"),
+            size,
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: Self::DEPTH_FORMAT,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        };
+
+        let texture = device.create_texture(&desc);
+        let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("Depth Texture Sampler"),
+            address_mode_u: wgpu::AddressMode::ClampToEdge,
+            address_mode_v: wgpu::AddressMode::ClampToEdge,
+            address_mode_w: wgpu::AddressMode::ClampToEdge,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::FilterMode::Nearest,
+            compare: Some(wgpu::CompareFunction::LessEqual),
+            lod_max_clamp: 100.0,
+            lod_min_clamp: 0.0,
+            ..Default::default()
+        });
+        return (texture, view, sampler);
+    }
+
     fn create_wgpu_instance() -> wgpu::Instance {
         wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::all(),
@@ -183,17 +236,12 @@ impl Minicraft {
             ],
         });
 
-        let camera = Camera {
-            position: vec3(0.0, 0.0, 0.0),
-            horizontal_angle: -3.14,
-            vertical_angle: 0.0,
-            aspect: config.width as f32 / config.height as f32,
-            fovy: 45.0,
-            zfar: 10000.0,
-            znear: 0.1,
-        };
-
-        let camera_uniform = camera.view_proj_matrix();
+        let camera = Camera::new(point3(0.0, 0.0, 0.0), cgmath::Deg(-90.0), cgmath::Deg(0.0));
+        let projection =
+            Projection::new(config.width, config.height, cgmath::Deg(90.0), 0.1, 10000.0);
+        let camera_controller = CameraController::new(2.0, 0.4);
+        let mut camera_uniform = CameraUniform::new();
+        camera_uniform.update(&projection, &camera);
 
         let camera_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("Camera Buffer"),
@@ -229,6 +277,8 @@ impl Minicraft {
             source: wgpu::ShaderSource::Wgsl(include_str!("shaders/shader.wgsl").into()),
         });
 
+        let depth_texture = Self::create_depth_texture(&device, &config);
+
         let render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 label: Some("Render Pipeline Layout"),
@@ -236,40 +286,47 @@ impl Minicraft {
                 push_constant_ranges: &[],
             });
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("Render Pipeline"),
-            layout: Some(&render_pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &shader,
-                entry_point: "vs_main",
-                buffers: &[Vertex::desc()],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &shader,
-                entry_point: "fs_main",
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: config.format,
-                    blend: Some(wgpu::BlendState::REPLACE),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleList,
-                strip_index_format: None,
-                front_face: wgpu::FrontFace::Cw,
-                cull_mode: Some(wgpu::Face::Back),
-                polygon_mode: wgpu::PolygonMode::Fill,
-                unclipped_depth: false,
-                conservative: false,
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState {
-                count: 1,
-                mask: !0,
-                alpha_to_coverage_enabled: false,
-            },
-            multiview: None,
-        });
+        let render_pipeline =
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("Render Pipeline"),
+                layout: Some(&render_pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &shader,
+                    entry_point: "vs_main",
+                    buffers: &[Vertex::desc()],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &shader,
+                    entry_point: "fs_main",
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: config.format,
+                        blend: Some(wgpu::BlendState::REPLACE),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    strip_index_format: None,
+                    front_face: wgpu::FrontFace::Cw,
+                    cull_mode: Some(wgpu::Face::Back),
+                    polygon_mode: wgpu::PolygonMode::Fill,
+                    unclipped_depth: false,
+                    conservative: false,
+                },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: Self::DEPTH_FORMAT,
+                    depth_write_enabled: true,
+                    depth_compare: wgpu::CompareFunction::Less,
+                    stencil: wgpu::StencilState::default(),
+                    bias: wgpu::DepthBiasState::default(),
+                }),
+                multisample: wgpu::MultisampleState {
+                    count: 1,
+                    mask: !0,
+                    alpha_to_coverage_enabled: false,
+                },
+                multiview: None,
+            });
         use wgpu::util::DeviceExt;
 
         let world = World::worldgen();
@@ -308,6 +365,11 @@ impl Minicraft {
             camera_buffer,
             camera_uniform,
             movement_speed: 1.0,
+            depth_texture,
+            camera_projection: projection,
+            camera_controller,
+            mouse_pressed: false,
+            allow_cam_rotation: false,
         };
 
         return minicraft;
@@ -315,19 +377,47 @@ impl Minicraft {
 
     pub fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
         if new_size.width > 0 && new_size.height > 0 {
+            self.camera_projection
+                .resize(new_size.width, new_size.height);
             self.size = new_size;
             self.config.width = new_size.width;
             self.config.height = new_size.height;
             self.surface.configure(&self.device, &self.config);
+            self.depth_texture = Self::create_depth_texture(&self.device, &self.config);
         }
     }
 
     pub fn input(&mut self, event: &winit::event::WindowEvent) -> bool {
-        false
+        match event {
+            WindowEvent::KeyboardInput {
+                input:
+                    KeyboardInput {
+                        virtual_keycode: Some(key),
+                        state,
+                        ..
+                    },
+                ..
+            } => self.camera_controller.process_keyboard(*key, *state),
+            WindowEvent::MouseInput { button, state, .. } => {
+                if *button == MouseButton::Left {
+                    self.mouse_pressed = *state == ElementState::Pressed;
+                    if self.mouse_pressed {
+                        self.allow_cam_rotation = !self.allow_cam_rotation;
+                    }
+                    println!("Camera rotation allowed: {}", self.allow_cam_rotation);
+                    true
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
     }
 
-    pub fn update(&mut self) {
-        self.camera_uniform = self.camera.view_proj_matrix();
+    pub fn update(&mut self, dt: std::time::Duration) {
+        self.camera_controller.update_camera(&mut self.camera, dt);
+        self.camera_uniform
+            .update(&self.camera_projection, &self.camera);
         self.queue.write_buffer(
             &self.camera_buffer,
             0,
@@ -337,7 +427,7 @@ impl Minicraft {
 
     pub fn render(&mut self) -> Result<(), wgpu::SurfaceError> {
         let output = self.surface.get_current_texture()?;
-        let view = output
+        let output_view = output
             .texture
             .create_view(&wgpu::TextureViewDescriptor::default());
         let mut encoder = self
@@ -346,17 +436,25 @@ impl Minicraft {
                 label: Some("Minicraft Encoder"),
             });
         {
+            let (_, depth_view, _) = &self.depth_texture;
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Render pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &output_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: wgpu::StoreOp::Store,
                     },
                 })],
-                depth_stencil_attachment: None,
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth_view,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 occlusion_query_set: None,
                 timestamp_writes: None,
             });
@@ -380,69 +478,49 @@ pub async fn run() {
     let event_loop = EventLoop::new();
     let window = WindowBuilder::new().build(&event_loop).unwrap();
     let mut game = Minicraft::new(window).await;
-
-    let mouse_speed = 1f32;
-    let mut prev = std::time::SystemTime::now();
-
-    let mut keys_being_pressed = std::collections::hash_set::HashSet::new();
-    let mut allow_camera_movement = true;
-    let mut last_mouse_pos = vec2(0.0, 0.0);
-
+    let mut last_render_time = std::time::Instant::now();
     event_loop.run(move |event, _, control_flow| {
-        let current = std::time::SystemTime::now();
-        let delta = std::time::Duration::from_millis(2);
-
+        *control_flow = ControlFlow::Poll;
         match event {
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::CloseRequested,
+            winit::event::Event::MainEventsCleared => game.window.request_redraw(),
+            winit::event::Event::DeviceEvent {
+                event: DeviceEvent::MouseMotion { delta },
                 ..
             } => {
-                println!("Closed requested!");
-                *control_flow = ControlFlow::Exit;
-            }
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::Resized(size),
-                ..
-            } => {
-                game.resize(size);
-            }
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::ScaleFactorChanged { new_inner_size, .. },
-                ..
-            } => {
-                game.resize(*new_inner_size);
+                if game.allow_cam_rotation {
+                    game.camera_controller
+                        .process_mouse(delta.0 as f32, delta.1 as f32);
+                }
             }
 
-            winit::event::Event::MainEventsCleared => {
-                //tracy_client::start_noncontinuous_frame!("frame");
-
-                let movement = game.movement_speed * delta.as_secs_f32();
-                for key in keys_being_pressed.iter() {
-                    match key {
-                        winit::event::VirtualKeyCode::W => {
-                            game.camera.go_forward(movement);
+            winit::event::Event::WindowEvent { ref event, .. } => {
+                if !game.input(event) {
+                    match event {
+                        WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                        WindowEvent::KeyboardInput {
+                            input:
+                                KeyboardInput {
+                                    virtual_keycode: Some(VirtualKeyCode::Escape),
+                                    state: ElementState::Pressed,
+                                    ..
+                                },
+                            ..
+                        } => *control_flow = ControlFlow::Exit,
+                        WindowEvent::Resized(physical_size) => {
+                            game.resize(*physical_size);
                         }
-                        winit::event::VirtualKeyCode::S => {
-                            game.camera.go_backward(movement);
-                        }
-                        winit::event::VirtualKeyCode::A => {
-                            game.camera.go_left(movement);
-                        }
-                        winit::event::VirtualKeyCode::D => {
-                            game.camera.go_right(movement);
-                        }
-                        winit::event::VirtualKeyCode::Key1 => {
-                            println!("Camera: {:?}", game.camera);
+                        WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                            game.resize(**new_inner_size);
                         }
                         _ => {}
                     }
                 }
-
-                game.window.request_redraw();
             }
-            winit::event::Event::RedrawEventsCleared => {}
             winit::event::Event::RedrawRequested(window_id) if window_id == game.window.id() => {
-                game.update();
+                let now = std::time::Instant::now();
+                let dt = now - last_render_time;
+                last_render_time = now;
+                game.update(dt);
                 match game.render() {
                     Ok(_) => {}
                     // Reconfigure the surface if lost
@@ -453,91 +531,10 @@ pub async fn run() {
                     Err(e) => eprintln!("{:?}", e),
                 }
             }
-            winit::event::Event::NewEvents(_) => {}
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::CursorMoved { position, .. },
-                ..
-            } => {
-                println!("Mouse moved: {:?} {}", position, delta.as_secs_f32());
-                let new_mouse_pos = vec2(position.x as f32, position.y as f32);
-                if allow_camera_movement {
-                    game.camera.horizontal_angle +=
-                        mouse_speed * delta.as_secs_f32() * (last_mouse_pos.x - new_mouse_pos.x);
-                    game.camera.vertical_angle +=
-                        mouse_speed * delta.as_secs_f32() * (last_mouse_pos.y - new_mouse_pos.y);
-                }
-
-                last_mouse_pos = new_mouse_pos;
-            }
-
-            winit::event::Event::WindowEvent {
-                event:
-                    winit::event::WindowEvent::MouseWheel {
-                        delta: winit::event::MouseScrollDelta::PixelDelta(physical_position),
-                        ..
-                    },
-                ..
-            } => {
-                println!("Mouse moved: {:?}", physical_position);
-                let change_x = 0.1 * delta.as_secs_f32() * physical_position.x as f32;
-                let change_y = 0.1 * mouse_speed * delta.as_secs_f32() * physical_position.y as f32;
-                println!(
-                    "Change in X, Y: {}, {}, delta secs: {}",
-                    change_x,
-                    change_y,
-                    delta.as_secs_f32()
-                );
-                game.camera.horizontal_angle += change_x;
-                game.camera.vertical_angle += change_y;
-            }
-            winit::event::Event::WindowEvent {
-                event:
-                    winit::event::WindowEvent::MouseInput {
-                        button: winit::event::MouseButton::Middle,
-                        state,
-                        ..
-                    },
-                ..
-            } => {
-                // println!("Mouse moved: {:?}", position);
-                allow_camera_movement = match state {
-                    winit::event::ElementState::Pressed => true,
-                    winit::event::ElementState::Released => false,
-                }
-            }
-
-            winit::event::Event::WindowEvent {
-                event: winit::event::WindowEvent::AxisMotion { .. },
-                ..
-            } => {}
-            winit::event::Event::WindowEvent {
-                event:
-                    winit::event::WindowEvent::KeyboardInput {
-                        input:
-                            winit::event::KeyboardInput {
-                                virtual_keycode: Some(key),
-                                state,
-                                ..
-                            },
-                        ..
-                    },
-                ..
-            } => match state {
-                winit::event::ElementState::Pressed => {
-                    keys_being_pressed.insert(key);
-                }
-                winit::event::ElementState::Released => {
-                    keys_being_pressed.remove(&key);
-                }
-            },
-            winit::event::Event::DeviceEvent { .. } => {}
             e => {
-                println!("Window Event: {:?}", e)
+                //println!("Window Event: {:?}", e)
             }
         }
-
-        prev = current;
-        //std::thread::sleep(std::time::Duration::from_millis(1));
     });
 }
 

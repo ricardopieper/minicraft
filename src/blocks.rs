@@ -683,7 +683,7 @@ const NICE_PLAINS_2: &'static [f64] = &[0.0005, 0.002];
 const LOW_HILLS: &'static [f64] = &[0.0005, 0.01];
 const LOW_HILLS_2: &'static [f64] = &[0.0005, 0.02, 0.001];
 const HIGH_SPIKES: &'static [f64] = &[0.05, 0.003];
-const TERRAIN: &'static [f64] = LOW_HILLS_2;
+const TERRAIN: &'static [f64] = INTERESTING_MOUNTAINS;
 
 const STARTING_RATE: f64 = 0.5;
 const DIVISOR: f64 = 3.0;
